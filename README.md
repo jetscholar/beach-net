@@ -314,6 +314,61 @@ Notes:
 
 ---
 
+### 🔌 WT32-ETH01 Flashing & FTDI Wiring
+
+The WT32-ETH01 **does not include USB**.
+Initial flashing **must be done via a USB-to-Serial (FTDI) adapter**.
+
+#### WT32-ETH01 Pinout Reference
+
+![WT32-ETH01 Pinout](assets/WT32-ET01-pinout.jpg)
+
+---
+
+#### FTDI Wiring (Minimum Required)
+
+| WT32 Pin | FTDI Pin          |
+| -------- | ----------------- |
+| RXD      | TX                |
+| TXD      | RX                |
+| GND      | GND               |
+| 3V3      | 3.3V              |
+| IO0      | GND *(boot only)* |
+
+> ⚠️ **Important:**
+> IO0 must be held **LOW only during power-up** to enter flash mode.
+
+---
+
+#### Flashing Procedure
+
+1. Connect FTDI (TX/RX/GND)
+2. Pull **IO0 → GND**
+3. Apply **3.3V power**
+4. Start upload (PlatformIO)
+5. Release IO0 after flashing begins
+6. Reset board if required
+
+---
+
+#### Power Notes
+
+* Ethernet PHY causes high current draw
+* External **3.3V regulator (≥500 mA)** is recommended
+* FTDI power is acceptable **only for short flashing sessions**
+* **Never apply 5V to 3V3 pin**
+
+---
+
+#### Serial Settings
+
+* Baud rate: **115200**
+* Data bits: 8
+* Parity: none
+* Stop bits: 1
+
+---
+
 ## ✍️ Notes
 
 This project intentionally avoids:
@@ -333,4 +388,3 @@ Private / internal project
 (license to be defined if open-sourced later)
 
 ---
-
