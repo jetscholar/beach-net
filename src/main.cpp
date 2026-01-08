@@ -2,6 +2,7 @@
 #include <ETH.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <ArduinoOTA.h>
 #include "env.h"
 
 // =================================================
@@ -49,8 +50,6 @@ void onNetworkEvent(WiFiEvent_t event) {
 		case ARDUINO_EVENT_ETH_GOT_IP:
 			eth_up = true;
 			debugPrintf("[ETH] IP: %s", ETH.localIP().toString().c_str());
-			debugPrintf("[ETH] GW: %s", ETH.gatewayIP().toString().c_str());
-			debugPrintf("[ETH] SN: %s", ETH.subnetMask().toString().c_str());
 			break;
 
 		case ARDUINO_EVENT_ETH_DISCONNECTED:
@@ -82,7 +81,7 @@ void onNetworkEvent(WiFiEvent_t event) {
 }
 
 // =================================================
-// Ethernet (LAN) Setup
+// Ethernet (LAN)
 // =================================================
 void setupEthernetLAN() {
 	debugPrint("[ETH] Initializing LAN Ethernet");
@@ -90,10 +89,9 @@ void setupEthernetLAN() {
 	WiFi.onEvent(onNetworkEvent);
 
 	IPAddress ip(LAN_IP_OCTETS);
-  IPAddress gw(LAN_GATEWAY_OCTETS);
-  IPAddress sn(LAN_SUBNET_OCTETS);
-  IPAddress dns(LAN_DNS_OCTETS);
-
+	IPAddress gw(LAN_GATEWAY_OCTETS);
+	IPAddress sn(LAN_SUBNET_OCTETS);
+	IPAddress dns(LAN_DNS_OCTETS);
 
 	if (!ETH.config(ip, gw, sn, dns)) {
 		debugPrint("[ETH] Static IP config FAILED");
@@ -101,38 +99,56 @@ void setupEthernetLAN() {
 	}
 
 	debugPrintf("[ETH] Static IP set: %s", ip.toString().c_str());
-
-	// PHY parameters come from platformio.ini
 	ETH.begin();
 }
 
 // =================================================
-// WiFi Access Point (LAN)
+// WiFi AP (LAN)
 // =================================================
 void setupWiFiLAN() {
 	debugPrint("[AP] Initializing LAN WiFi AP");
 
 	IPAddress ip(LAN_IP_OCTETS);
-  IPAddress gw(LAN_GATEWAY_OCTETS);
-  IPAddress sn(LAN_SUBNET_OCTETS);
+	IPAddress gw(LAN_GATEWAY_OCTETS);
+	IPAddress sn(LAN_SUBNET_OCTETS);
 
 	if (!WiFi.softAPConfig(ip, gw, sn)) {
 		debugPrint("[AP] softAPConfig FAILED");
 		return;
 	}
 
-	if (!WiFi.softAP(
-		AP_SSID,
-		AP_PASSWORD,
-		AP_CHANNEL,
-		false,              // SSID visible
-		AP_MAX_CLIENTS
-	)) {
+	if (!WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, false, AP_MAX_CLIENTS)) {
 		debugPrint("[AP] softAP start FAILED");
 		return;
 	}
 
 	debugPrint("[AP] WiFi AP ready (DHCP enabled)");
+}
+
+// =================================================
+// OTA
+// =================================================
+void setupOTA() {
+	debugPrint("[OTA] Initializing");
+
+	ArduinoOTA.setHostname(DEVICE_ID);
+	ArduinoOTA.setPassword("beachnet-ota");
+
+	ArduinoOTA.onStart([]() {
+		debugPrint("[OTA] Update started");
+	});
+
+	ArduinoOTA.onEnd([]() {
+		debugPrint("[OTA] Update complete");
+	});
+
+	ArduinoOTA.onError([](ota_error_t error) {
+		Serial.printf("[OTA] Error[%u]\n", error);
+	});
+
+	ArduinoOTA.begin();
+
+	debugPrint("[OTA] Ready");
 }
 
 // =================================================
@@ -150,12 +166,11 @@ void setup() {
 	Serial.printf("LAN IP    : %d.%d.%d.%d\n", LAN_IP_OCTETS);
 	Serial.println("----------------------------------------");
 
-	// LAN comes up first — always
 	setupEthernetLAN();
 	delay(1500);
 	setupWiFiLAN();
+	setupOTA();
 
-	// Local discovery (LAN only)
 	if (MDNS.begin(DEVICE_ID)) {
 		debugPrintf("[mDNS] %s.local active", DEVICE_ID);
 	}
@@ -169,6 +184,8 @@ void setup() {
 // Loop
 // =================================================
 void loop() {
+	ArduinoOTA.handle();
+
 	static uint32_t last = 0;
 	uint32_t now = millis();
 
@@ -185,5 +202,5 @@ void loop() {
 		Serial.println("==============");
 	}
 
-	delay(100);
+	delay(50);
 }
