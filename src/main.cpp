@@ -88,6 +88,19 @@ void setupEthernetLAN() {
 
 	WiFi.onEvent(onNetworkEvent);
 
+	// Ensure PHY power is enabled (WT32-ETH01 LAN8720)
+	// ETH_PHY_POWER is provided via build_flags (typically GPIO16).
+#if defined(ETH_PHY_POWER)
+	pinMode(ETH_PHY_POWER, OUTPUT);
+	digitalWrite(ETH_PHY_POWER, HIGH);
+	delay(300); // allow PHY to power/stabilize before begin()
+#else
+	// Fallback (WT32 common): GPIO16
+	pinMode(16, OUTPUT);
+	digitalWrite(16, HIGH);
+	delay(300);
+#endif
+
 	IPAddress ip(LAN_IP_OCTETS);
 	IPAddress gw(LAN_GATEWAY_OCTETS);
 	IPAddress sn(LAN_SUBNET_OCTETS);
@@ -99,6 +112,11 @@ void setupEthernetLAN() {
 	}
 
 	debugPrintf("[ETH] Static IP set: %s", ip.toString().c_str());
+
+	// Small extra delay improves link negotiation reliability on some boards
+	delay(100);
+
+	// PHY parameters come from platformio.ini build_flags
 	ETH.begin();
 }
 
