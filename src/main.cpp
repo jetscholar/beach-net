@@ -5,6 +5,21 @@
 #include <ArduinoOTA.h>
 #include "env.h"
 
+// NAPT / routing (ESP32 Arduino core with lwIP NAPT enabled)
+extern "C" {
+	#include "lwip/lwip_napt.h"
+}
+
+#ifndef STATION_IF
+	#define STATION_IF 0
+#endif
+#ifndef SOFTAP_IF
+	#define SOFTAP_IF 1
+#endif
+#ifndef ETH_IF
+	#define ETH_IF 2
+#endif
+
 // =================================================
 // State
 // =================================================
@@ -32,6 +47,23 @@ void debugPrintf(const char* fmt, ...) {
 }
 
 // =================================================
+// AP subnet defaults (separate from Ethernet LAN)
+// If you want to override, define these in env.h
+// =================================================
+#ifndef AP_IP_OCTETS
+	#define AP_IP_OCTETS 172,18,2,1
+#endif
+#ifndef AP_SUBNET_OCTETS
+	#define AP_SUBNET_OCTETS 255,255,255,0
+#endif
+#ifndef AP_DHCP_START_OCTETS
+	#define AP_DHCP_START_OCTETS 172,18,2,100
+#endif
+#ifndef AP_DHCP_END_OCTETS
+	#define AP_DHCP_END_OCTETS 172,18,2,200
+#endif
+
+// =================================================
 // Unified Network Event Handler
 // =================================================
 void onNetworkEvent(WiFiEvent_t event) {
@@ -50,6 +82,8 @@ void onNetworkEvent(WiFiEvent_t event) {
 		case ARDUINO_EVENT_ETH_GOT_IP:
 			eth_up = true;
 			debugPrintf("[ETH] IP: %s", ETH.localIP().toString().c_str());
+			debugPrintf("[ETH] GW: %s", ETH.gatewayIP().toString().c_str());
+			debugPrintf("[ETH] SN: %s", ETH.subnetMask().toString().c_str());
 			break;
 
 		case ARDUINO_EVENT_ETH_DISCONNECTED:
@@ -81,7 +115,7 @@ void onNetworkEvent(WiFiEvent_t event) {
 }
 
 // =================================================
-// Ethernet (LAN)
+// Ethernet (LAN) — this is the "wired" side (Pi side)
 // =================================================
 void setupEthernetLAN() {
 	debugPrint("[ETH] Initializing LAN Ethernet");
@@ -89,13 +123,11 @@ void setupEthernetLAN() {
 	WiFi.onEvent(onNetworkEvent);
 
 	// Ensure PHY power is enabled (WT32-ETH01 LAN8720)
-	// ETH_PHY_POWER is provided via build_flags (typically GPIO16).
 #if defined(ETH_PHY_POWER)
 	pinMode(ETH_PHY_POWER, OUTPUT);
 	digitalWrite(ETH_PHY_POWER, HIGH);
-	delay(300); // allow PHY to power/stabilize before begin()
+	delay(300);
 #else
-	// Fallback (WT32 common): GPIO16
 	pinMode(16, OUTPUT);
 	digitalWrite(16, HIGH);
 	delay(300);
@@ -113,24 +145,21 @@ void setupEthernetLAN() {
 
 	debugPrintf("[ETH] Static IP set: %s", ip.toString().c_str());
 
-	// Small extra delay improves link negotiation reliability on some boards
 	delay(100);
-
-	// PHY parameters come from platformio.ini build_flags
 	ETH.begin();
 }
 
 // =================================================
-// WiFi AP (LAN)
+// WiFi AP — separate subnet from Ethernet (required)
 // =================================================
 void setupWiFiLAN() {
-	debugPrint("[AP] Initializing LAN WiFi AP");
+	debugPrint("[AP] Initializing WiFi AP");
 
-	IPAddress ip(LAN_IP_OCTETS);
-	IPAddress gw(LAN_GATEWAY_OCTETS);
-	IPAddress sn(LAN_SUBNET_OCTETS);
+	IPAddress ap_ip(AP_IP_OCTETS);
+	IPAddress ap_gw(AP_IP_OCTETS);      // AP gateway is WT32 itself
+	IPAddress ap_sn(AP_SUBNET_OCTETS);
 
-	if (!WiFi.softAPConfig(ip, gw, sn)) {
+	if (!WiFi.softAPConfig(ap_ip, ap_gw, ap_sn)) {
 		debugPrint("[AP] softAPConfig FAILED");
 		return;
 	}
@@ -140,7 +169,29 @@ void setupWiFiLAN() {
 		return;
 	}
 
+	IPAddress dhcp_start(AP_DHCP_START_OCTETS);
+	IPAddress dhcp_end(AP_DHCP_END_OCTETS);
+	debugPrintf("[AP] DHCP range (info): %s - %s",
+	            dhcp_start.toString().c_str(),
+	            dhcp_end.toString().c_str());
+
 	debugPrint("[AP] WiFi AP ready (DHCP enabled)");
+}
+
+// =================================================
+// Enable routing/NAPT so AP clients can reach Ethernet LAN
+// =================================================
+void setupRouting() {
+	debugPrint("[NET] Enabling routing/NAPT (AP -> ETH)");
+
+	// NAPT must be enabled in lwIP build. If it's not, upload will compile-fail.
+	// Enable NAPT on the "inside" (SOFTAP_IF). This is the common ESP32 router setup.
+	ip_napt_enable_no(SOFTAP_IF, 1);
+
+	// Some builds also need ETH_IF explicitly enabled. Safe to call.
+	ip_napt_enable_no(ETH_IF, 1);
+
+	debugPrint("[NET] NAPT enabled");
 }
 
 // =================================================
@@ -181,12 +232,14 @@ void setup() {
 	Serial.println(" WT32-ETH01 BEACH HOUSE GATEWAY");
 	Serial.println("========================================");
 	Serial.printf("Device ID : %s\n", DEVICE_ID);
-	Serial.printf("LAN IP    : %d.%d.%d.%d\n", LAN_IP_OCTETS);
+	Serial.printf("ETH (LAN) : %d.%d.%d.%d\n", LAN_IP_OCTETS);
+	Serial.printf("AP  (LAN) : %d.%d.%d.%d\n", AP_IP_OCTETS);
 	Serial.println("----------------------------------------");
 
 	setupEthernetLAN();
 	delay(1500);
 	setupWiFiLAN();
+	setupRouting();
 	setupOTA();
 
 	if (MDNS.begin(DEVICE_ID)) {
@@ -194,7 +247,7 @@ void setup() {
 	}
 
 	Serial.println("----------------------------------------");
-	Serial.println("LAN gateway ONLINE");
+	Serial.println("Gateway ONLINE");
 	Serial.println("========================================");
 }
 
@@ -214,11 +267,18 @@ void loop() {
 		Serial.println("=== STATUS ===");
 		Serial.printf("Uptime : %lus\n", now / 1000);
 		Serial.printf("ETH    : %s\n", eth_up ? "UP" : "DOWN");
+		if (eth_up) {
+			Serial.printf("  ETH IP: %s\n", ETH.localIP().toString().c_str());
+		}
 		Serial.printf("WiFi AP: %s (%d clients)\n",
 		              ap_up ? "UP" : "DOWN",
 		              WiFi.softAPgetStationNum());
+		if (ap_up) {
+			Serial.printf("  AP  IP: %s\n", WiFi.softAPIP().toString().c_str());
+		}
 		Serial.println("==============");
 	}
 
 	delay(50);
 }
+
