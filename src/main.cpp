@@ -5,21 +5,6 @@
 #include <ArduinoOTA.h>
 #include "env.h"
 
-// NAPT / routing (ESP32 Arduino core with lwIP NAPT enabled)
-extern "C" {
-	#include "lwip/lwip_napt.h"
-}
-
-#ifndef STATION_IF
-	#define STATION_IF 0
-#endif
-#ifndef SOFTAP_IF
-	#define SOFTAP_IF 1
-#endif
-#ifndef ETH_IF
-	#define ETH_IF 2
-#endif
-
 // =================================================
 // State
 // =================================================
@@ -47,8 +32,7 @@ void debugPrintf(const char* fmt, ...) {
 }
 
 // =================================================
-// AP subnet defaults (separate from Ethernet LAN)
-// If you want to override, define these in env.h
+// AP subnet defaults (override in env.h if needed)
 // =================================================
 #ifndef AP_IP_OCTETS
 	#define AP_IP_OCTETS 172,18,2,1
@@ -64,12 +48,11 @@ void debugPrintf(const char* fmt, ...) {
 #endif
 
 // =================================================
-// Unified Network Event Handler
+// Network Events
 // =================================================
 void onNetworkEvent(WiFiEvent_t event) {
 	switch (event) {
 
-		// ---------- Ethernet ----------
 		case ARDUINO_EVENT_ETH_START:
 			debugPrint("[ETH] Started");
 			ETH.setHostname(DEVICE_ID);
@@ -82,8 +65,6 @@ void onNetworkEvent(WiFiEvent_t event) {
 		case ARDUINO_EVENT_ETH_GOT_IP:
 			eth_up = true;
 			debugPrintf("[ETH] IP: %s", ETH.localIP().toString().c_str());
-			debugPrintf("[ETH] GW: %s", ETH.gatewayIP().toString().c_str());
-			debugPrintf("[ETH] SN: %s", ETH.subnetMask().toString().c_str());
 			break;
 
 		case ARDUINO_EVENT_ETH_DISCONNECTED:
@@ -91,22 +72,10 @@ void onNetworkEvent(WiFiEvent_t event) {
 			eth_up = false;
 			break;
 
-		// ---------- WiFi AP ----------
 		case ARDUINO_EVENT_WIFI_AP_START:
 			ap_up = true;
 			debugPrint("[AP] Started");
-			debugPrintf("[AP] SSID: %s", AP_SSID);
 			debugPrintf("[AP] IP: %s", WiFi.softAPIP().toString().c_str());
-			break;
-
-		case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
-			debugPrintf("[AP] Client joined (%d total)",
-			            WiFi.softAPgetStationNum());
-			break;
-
-		case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
-			debugPrintf("[AP] Client left (%d total)",
-			            WiFi.softAPgetStationNum());
 			break;
 
 		default:
@@ -115,23 +84,21 @@ void onNetworkEvent(WiFiEvent_t event) {
 }
 
 // =================================================
-// Ethernet (LAN) — this is the "wired" side (Pi side)
+// Ethernet (LAN / Pi side)
 // =================================================
 void setupEthernetLAN() {
-	debugPrint("[ETH] Initializing LAN Ethernet");
+	debugPrint("[ETH] Initializing Ethernet");
 
 	WiFi.onEvent(onNetworkEvent);
 
-	// Ensure PHY power is enabled (WT32-ETH01 LAN8720)
-#if defined(ETH_PHY_POWER)
-	pinMode(ETH_PHY_POWER, OUTPUT);
-	digitalWrite(ETH_PHY_POWER, HIGH);
-	delay(300);
-#else
+	// PHY power (WT32-ETH01 = GPIO16)
 	pinMode(16, OUTPUT);
 	digitalWrite(16, HIGH);
 	delay(300);
-#endif
+
+	ETH.begin();   // IMPORTANT: begin first
+
+	delay(200);
 
 	IPAddress ip(LAN_IP_OCTETS);
 	IPAddress gw(LAN_GATEWAY_OCTETS);
@@ -140,23 +107,19 @@ void setupEthernetLAN() {
 
 	if (!ETH.config(ip, gw, sn, dns)) {
 		debugPrint("[ETH] Static IP config FAILED");
-		return;
+	} else {
+		debugPrintf("[ETH] Static IP set: %s", ip.toString().c_str());
 	}
-
-	debugPrintf("[ETH] Static IP set: %s", ip.toString().c_str());
-
-	delay(100);
-	ETH.begin();
 }
 
 // =================================================
-// WiFi AP — separate subnet from Ethernet (required)
+// WiFi AP (client side)
 // =================================================
 void setupWiFiLAN() {
 	debugPrint("[AP] Initializing WiFi AP");
 
 	IPAddress ap_ip(AP_IP_OCTETS);
-	IPAddress ap_gw(AP_IP_OCTETS);      // AP gateway is WT32 itself
+	IPAddress ap_gw(AP_IP_OCTETS);
 	IPAddress ap_sn(AP_SUBNET_OCTETS);
 
 	if (!WiFi.softAPConfig(ap_ip, ap_gw, ap_sn)) {
@@ -169,24 +132,9 @@ void setupWiFiLAN() {
 		return;
 	}
 
-	IPAddress dhcp_start(AP_DHCP_START_OCTETS);
-	IPAddress dhcp_end(AP_DHCP_END_OCTETS);
-	debugPrintf("[AP] DHCP range (info): %s - %s",
-	            dhcp_start.toString().c_str(),
-	            dhcp_end.toString().c_str());
-
-	debugPrint("[AP] WiFi AP ready (DHCP enabled)");
+	debugPrintf("[AP] DHCP: %d.%d.%d.100 - 200", AP_IP_OCTETS);
+	debugPrint("[AP] WiFi AP ready");
 }
-
-// =================================================
-// Enable routing/NAPT so AP clients can reach Ethernet LAN
-// =================================================
-void setupRouting() {
-	debugPrint("[NET] Enabling routing/NAPT (AP → ETH)");
-	ip_napt_enable(IPADDR_ANY, 1);
-	debugPrint("[NET] NAPT enabled");
-}
-
 
 // =================================================
 // OTA
@@ -198,19 +146,18 @@ void setupOTA() {
 	ArduinoOTA.setPassword("beachnet-ota");
 
 	ArduinoOTA.onStart([]() {
-		debugPrint("[OTA] Update started");
+		debugPrint("[OTA] Start");
 	});
 
 	ArduinoOTA.onEnd([]() {
-		debugPrint("[OTA] Update complete");
+		debugPrint("[OTA] End");
 	});
 
 	ArduinoOTA.onError([](ota_error_t error) {
-		Serial.printf("[OTA] Error[%u]\n", error);
+		Serial.printf("[OTA] Error %u\n", error);
 	});
 
 	ArduinoOTA.begin();
-
 	debugPrint("[OTA] Ready");
 }
 
@@ -225,23 +172,17 @@ void setup() {
 	Serial.println("========================================");
 	Serial.println(" WT32-ETH01 BEACH HOUSE GATEWAY");
 	Serial.println("========================================");
-	Serial.printf("Device ID : %s\n", DEVICE_ID);
-	Serial.printf("ETH (LAN) : %d.%d.%d.%d\n", LAN_IP_OCTETS);
-	Serial.printf("AP  (LAN) : %d.%d.%d.%d\n", AP_IP_OCTETS);
-	Serial.println("----------------------------------------");
 
 	setupEthernetLAN();
 	delay(1500);
+
 	setupWiFiLAN();
-	setupRouting();
 	setupOTA();
 
 	if (MDNS.begin(DEVICE_ID)) {
-		debugPrintf("[mDNS] %s.local active", DEVICE_ID);
+		debugPrintf("[mDNS] %s.local", DEVICE_ID);
 	}
 
-	Serial.println("----------------------------------------");
-	Serial.println("Gateway ONLINE");
 	Serial.println("========================================");
 }
 
@@ -252,27 +193,17 @@ void loop() {
 	ArduinoOTA.handle();
 
 	static uint32_t last = 0;
-	uint32_t now = millis();
-
-	if (now - last >= 30000) {
-		last = now;
+	if (millis() - last > 30000) {
+		last = millis();
 
 		Serial.println();
 		Serial.println("=== STATUS ===");
-		Serial.printf("Uptime : %lus\n", now / 1000);
-		Serial.printf("ETH    : %s\n", eth_up ? "UP" : "DOWN");
-		if (eth_up) {
-			Serial.printf("  ETH IP: %s\n", ETH.localIP().toString().c_str());
-		}
-		Serial.printf("WiFi AP: %s (%d clients)\n",
-		              ap_up ? "UP" : "DOWN",
-		              WiFi.softAPgetStationNum());
-		if (ap_up) {
-			Serial.printf("  AP  IP: %s\n", WiFi.softAPIP().toString().c_str());
-		}
-		Serial.println("==============");
+		Serial.printf("ETH : %s\n", eth_up ? "UP" : "DOWN");
+		Serial.printf("AP  : %s (%d clients)\n",
+			ap_up ? "UP" : "DOWN",
+			WiFi.softAPgetStationNum());
 	}
-
 	delay(50);
 }
+
 
