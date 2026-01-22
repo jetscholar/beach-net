@@ -182,17 +182,11 @@ void setupWiFiLAN() {
 // Enable routing/NAPT so AP clients can reach Ethernet LAN
 // =================================================
 void setupRouting() {
-	debugPrint("[NET] Enabling routing/NAPT (AP -> ETH)");
-
-	// NAPT must be enabled in lwIP build. If it's not, upload will compile-fail.
-	// Enable NAPT on the "inside" (SOFTAP_IF). This is the common ESP32 router setup.
-	ip_napt_enable_no(SOFTAP_IF, 1);
-
-	// Some builds also need ETH_IF explicitly enabled. Safe to call.
-	ip_napt_enable_no(ETH_IF, 1);
-
+	debugPrint("[NET] Enabling routing/NAPT (AP → ETH)");
+	ip_napt_enable(IPADDR_ANY, 1);
 	debugPrint("[NET] NAPT enabled");
 }
+
 
 // =================================================
 // OTA
